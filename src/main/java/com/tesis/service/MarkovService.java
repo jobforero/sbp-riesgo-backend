@@ -25,9 +25,16 @@ public class MarkovService {
             throw new IllegalStateException("No se encontró el script en: " + scriptR.getAbsolutePath());
         }
 
-        String comandoR = "C:\\Program Files\\R\\R-4.1.2\\bin\\x64\\Rscript.exe";
-        if (!new File(comandoR).exists()) {
-            comandoR = "C:\\Program Files\\R\\R-4.1.2\\bin\\Rscript.exe";
+        // Detección automática del sistema operativo:
+        String comandoR;
+        if (System.getProperty("os.name").toLowerCase().contains("win")) {
+            comandoR = "C:\\Program Files\\R\\R-4.1.2\\bin\\x64\\Rscript.exe";
+            if (!new File(comandoR).exists()) {
+                comandoR = "C:\\Program Files\\R\\R-4.1.2\\bin\\Rscript.exe";
+            }
+        } else {
+            // En Linux / Render / Docker el comando está en el PATH global del sistema
+            comandoR = "Rscript";
         }
 
         ProcessBuilder pb = new ProcessBuilder(

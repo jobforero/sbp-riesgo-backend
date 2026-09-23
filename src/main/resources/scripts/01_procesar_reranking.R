@@ -1,4 +1,6 @@
-.libPaths(c("C:/Users/jobfm/Documents/R/win-library/4.1", .libPaths()))
+if (Sys.info()["sysname"] == "Windows") {
+  .libPaths(c("C:/Users/jobfm/Documents/R/win-library/4.1", .libPaths()))
+}
 # 01_procesar_reranking.R
 # Pipeline analítico: Ingesta SBP + Cadenas de Markov + Exportación JSON/Base64
 
