@@ -1,53 +1,7 @@
-# ------------------------------------------------------------------------------
-# ETAPA 1: Compilación de Quarkus con Maven
-# ------------------------------------------------------------------------------
-FROM maven:3.9.6-eclipse-temurin-17 AS build
-WORKDIR /app
-
-COPY pom.xml .
-COPY src ./src
-RUN mvn package -DskipTests
-
-# ------------------------------------------------------------------------------
-# ETAPA 2: Runtime Java 17 + R y librerías precompiladas de Ubuntu
-# ------------------------------------------------------------------------------
-FROM eclipse-temurin:17-jre-jammy
-
-# 1. Instalar R base y los paquetes principales empaquetados para Ubuntu
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    r-base \
-    r-cran-readxl \
-    r-cran-dplyr \
-    r-cran-tidyr \
-    r-cran-stringr \
-    r-cran-purrr \
-    r-cran-lubridate \
-    r-cran-ggplot2 \
-    r-cran-jsonlite \
-    r-cran-base64enc \
-    libxml2-dev \
-    libssl-dev \
-    libcurl4-openssl-dev \
-    gfortran \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. Instalar markovchain desde CRAN (este paquete en particular sí se compila)
-RUN R -e "install.packages('markovchain', repos='https://cloud.r-project.org/')"
-
-WORKDIR /work
-
-# 3. Copiar la aplicación empaquetada de Quarkus
-COPY --from=build /app/target/quarkus-app/lib/ /work/lib/
-COPY --from=build /app/target/quarkus-app/*.jar /work/
-COPY --from=build /app/target/quarkus-app/app/ /work/app/
-COPY --from=build /app/target/quarkus-app/quarkus/ /work/quarkus/
-
-# 4. Copiar los scripts de R y crear carpeta de subidas
-COPY src/main/resources/scripts/ /work/src/main/resources/scripts/
-RUN mkdir -p /work/uploads
-
-EXPOSE 8080
-ENV QUARKUS_HTTP_HOST=0.0.0.0
-
-CMD ["java", "-jar", "/work/quarkus-run.jar"]
+target/
+.git
+.idea/
+*.iml
+.mvn/
+uploads/
+*.xlsx
