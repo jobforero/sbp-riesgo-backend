@@ -9,11 +9,11 @@ COPY src ./src
 RUN mvn package -DskipTests
 
 # ------------------------------------------------------------------------------
-# ETAPA 2: Runtime Java 17 + R y librerías estadísticas precompiladas
+# ETAPA 2: Runtime Java 17 + R y librerías estadísticas
 # ------------------------------------------------------------------------------
 FROM eclipse-temurin:17-jre-jammy
 
-# 1. Instalar R base y librerías precompiladas de Ubuntu
+# 1. Instalar R base y todos los paquetes precompilados de Ubuntu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     r-base \
     r-cran-readxl \
@@ -25,25 +25,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     r-cran-ggplot2 \
     r-cran-jsonlite \
     r-cran-base64enc \
+    r-cran-markovchain \
     libxml2-dev \
     libssl-dev \
     libcurl4-openssl-dev \
+    liblapack-dev \
+    libblas-dev \
     gfortran \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Instalar markovchain desde CRAN
-RUN R -e "install.packages('markovchain', repos='https://cloud.r-project.org/')"
-
 WORKDIR /work
 
-# 3. Copiar los artefactos generados por Quarkus
+# 2. Copiar los artefactos generados por Quarkus
 COPY --from=build /app/target/quarkus-app/lib/ /work/lib/
 COPY --from=build /app/target/quarkus-app/*.jar /work/
 COPY --from=build /app/target/quarkus-app/app/ /work/app/
 COPY --from=build /app/target/quarkus-app/quarkus/ /work/quarkus/
 
-# 4. Copiar los scripts de R y crear la carpeta temporal de subida
+# 3. Copiar scripts y preparar directorio de subida
 COPY src/main/resources/scripts/ /work/src/main/resources/scripts/
 RUN mkdir -p /work/uploads
 
