@@ -250,6 +250,56 @@ p_area <- ggplot(evolucion_tiers, aes(x = fecha_corte, y = proporcion, fill = es
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
 
+
+  # 7.5 Gráfico 5: Diagrama de Cajas (Boxplot) de Distribución de Saldos por Tier
+  df_boxplot <- datos_con_estados %>%
+    filter(total_construccion > 0) %>%
+    mutate(saldo_millones = total_construccion / 1e6)
+
+  p_boxplot <- ggplot(df_boxplot, aes(x = estado_markov, y = saldo_millones, fill = estado_markov)) +
+    geom_boxplot(outlier.colour = "#ef4444", outlier.alpha = 0.6, alpha = 0.85) +
+    scale_y_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
+    scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                                 "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+    theme_minimal(base_size = 12) +
+    labs(
+      title = "Distribución y Asimetría del Saldo por Estrato (Escala Log)",
+      subtitle = "Dispersión, cuartiles y valores atípicos de exposición crediticia",
+      x = "Estrato de Exposición",
+      y = "Saldo Crédito Construcción (Log USD)",
+      fill = "Estrato"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold", color = "#0f172a"),
+      legend.position = "none"
+    )
+
+  grafico_boxplot_base64 <- guardar_grafico_base64(p_boxplot, width = 8.5, height = 5)
+
+  # 7.6 Gráfico 6: Dispersión y Regresión Lineal (Cartera Total vs Cartera Construcción)
+  df_scatter <- datos_con_estados %>%
+    filter(total_cartera > 0, total_construccion > 0) %>%
+    mutate(
+      cartera_total_m = total_cartera / 1e6,
+      construccion_m = total_construccion / 1e6
+    )
+
+  p_scatter <- ggplot(df_scatter, aes(x = cartera_total_m, y = construccion_m)) +
+    geom_point(color = "#0284c7", alpha = 0.35, size = 2) +
+    geom_smooth(method = "lm", color = "#0f172a", linewidth = 1.1, se = TRUE) +
+    scale_x_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
+    scale_y_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
+    theme_minimal(base_size = 12) +
+    labs(
+      title = "Correlación Bivariada: Cartera General vs. Sector Construcción",
+      subtitle = "Ajuste por mínimos cuadrados ordinarios (MCO) en escala logarítmica",
+      x = "Cartera Total del Banco (Log USD)",
+      y = "Crédito en Construcción (Log USD)"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold", color = "#0f172a")
+    )
+
 grafico_area_base64 <- guardar_grafico_base64(p_area, width = 8.5, height = 5.2)
 
 # 8. Salida JSON estructurada para consumo de Quarkus
@@ -262,7 +312,9 @@ salida_resultado <- list(
   grafico_markov_base64 = grafico_heatmap_base64,
   grafico_proyeccion_base64 = grafico_proyeccion_base64,
   grafico_concentracion_base64 = grafico_concentracion_base64,
-  grafico_area_base64 = grafico_area_base64
+  grafico_area_base64 = grafico_area_base64,
+  grafico_boxplot_base64 = grafico_boxplot_base64,
+  grafico_scatter_base64 = grafico_scatter_base64
 )
 
 cat(toJSON(salida_resultado, auto_unbox = TRUE))
