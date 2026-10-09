@@ -2,7 +2,7 @@ if (Sys.info()["sysname"] == "Windows") {
   .libPaths(c("C:/Users/jobfm/Documents/R/win-library/4.1", .libPaths()))
 }
 # 01_procesar_reranking.R
-# Pipeline analítico: Ingesta SBP + Cadenas de Markov + Visualizaciones Estocásticas y de Concentración
+# Pipeline analítico: Ingesta SBP + Cadenas de Markov + Visualizaciones Estocásticas, Concentración y Dinámica Temporal
 
 suppressPackageStartupMessages({
   library(readxl)
@@ -145,10 +145,9 @@ p_heatmap <- ggplot(df_heatmap, aes(x = Destino, y = Origen, fill = Probabilidad
 
 grafico_heatmap_base64 <- guardar_grafico_base64(p_heatmap, width = 8, height = 5.5)
 
-# 7.2 Gráfico 2: Proyección y Convergencia Estocástica (P^t para t = 1, 3, 6, 12, 24 meses)
+# 7.2 Gráfico 2: Proyección y Convergencia Estocástica (P^t para t = 1, 2, 3, 6, 12, 24 meses)
 horizontes <- c(1, 2, 3, 6, 12, 24)
 df_proyeccion <- data.frame()
-
 mc_obj <- fit_markov$estimate
 
 for (h in horizontes) {
@@ -188,7 +187,7 @@ p_proyeccion <- ggplot(df_proyeccion %>% filter(Origen == Destino),
 
 grafico_proyeccion_base64 <- guardar_grafico_base64(p_proyeccion, width = 8, height = 5)
 
-# 7.3 Gráfico 3: Concentración de Cartera Bancaria (Top 10 Entidades en Construcción)
+# 7.3 Gráfico 3: Concentración de Cartera Bancaria (Top 10 Entidades)
 fecha_reciente <- max(datos_con_estados$fecha_corte, na.rm = TRUE)
 top_bancos <- datos_con_estados %>%
   filter(fecha_corte == fecha_reciente, total_construccion > 0) %>%
@@ -219,6 +218,40 @@ p_concentracion <- ggplot(top_bancos, aes(x = reorder(banco_corto, saldo_millone
 
 grafico_concentracion_base64 <- guardar_grafico_base64(p_concentracion, width = 8.5, height = 5.2)
 
+# 7.4 Gráfico 4: Evolución Temporal por Áreas Apiladas (Stacked Area Chart - 100% Cuota de Mercado)
+evolucion_tiers <- datos_con_estados %>%
+  group_by(fecha_corte, estado_markov) %>%
+  summarise(saldo_tier = sum(total_construccion, na.rm = TRUE), .groups = "drop") %>%
+  group_by(fecha_corte) %>%
+  mutate(
+    saldo_total_mes = sum(saldo_tier),
+    proporcion = ifelse(saldo_total_mes > 0, saldo_tier / saldo_total_mes, 0)
+  ) %>%
+  ungroup() %>%
+  mutate(estado_markov = factor(estado_markov, levels = rev(estados_posibles)))
+
+p_area <- ggplot(evolucion_tiers, aes(x = fecha_corte, y = proporcion, fill = estado_markov)) +
+  geom_area(alpha = 0.9, position = "stack") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "6 months") +
+  scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                               "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Evolución Temporal de la Cuota de Mercado por Estratos (Stacked Area)",
+    subtitle = "Participación histórica mensual del saldo crediticio según clasificación Markov",
+    x = "Línea Temporal",
+    y = "Participación Acumulada (% del Sistema)",
+    fill = "Estrato"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", color = "#0f172a"),
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+grafico_area_base64 <- guardar_grafico_base64(p_area, width = 8.5, height = 5.2)
+
 # 8. Salida JSON estructurada para consumo de Quarkus
 salida_resultado <- list(
   status = "SUCCESS",
@@ -228,7 +261,8 @@ salida_resultado <- list(
   matriz_transicion = as.data.frame(matriz_probabilidades),
   grafico_markov_base64 = grafico_heatmap_base64,
   grafico_proyeccion_base64 = grafico_proyeccion_base64,
-  grafico_concentracion_base64 = grafico_concentracion_base64
+  grafico_concentracion_base64 = grafico_concentracion_base64,
+  grafico_area_base64 = grafico_area_base64
 )
 
 cat(toJSON(salida_resultado, auto_unbox = TRUE))
