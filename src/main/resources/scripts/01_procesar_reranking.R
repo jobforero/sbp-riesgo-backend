@@ -2,7 +2,7 @@ if (Sys.info()["sysname"] == "Windows") {
   .libPaths(c("C:/Users/jobfm/Documents/R/win-library/4.1", .libPaths()))
 }
 # 01_procesar_reranking.R
-# Pipeline analítico: Ingesta SBP + Cadenas de Markov + Exportación JSON/Base64
+# Pipeline analítico: Ingesta SBP + Cadenas de Markov + Visualizaciones Estocásticas y de Concentración
 
 suppressPackageStartupMessages({
   library(readxl)
@@ -17,7 +17,7 @@ suppressPackageStartupMessages({
   library(base64enc)
 })
 
-# 1. Definición de argumentos (Permite ejecución dinámica desde Quarkus o manual)
+# 1. Definición de argumentos
 args <- commandArgs(trailingOnly = TRUE)
 archivo_excel <- if (length(args) > 0) args[1] else "RE-RANKING-en-RE0026_.xlsx"
 
@@ -89,10 +89,6 @@ datos_consolidados <- map_dfr(hojas, procesar_hoja) %>%
   arrange(banco, fecha_corte)
 
 # 5. Modelado Estocástico: Clasificación en Estados para Cadenas de Markov
-# - TIER_1_ALTO: Cuota de mercado en construcción > 15%
-# - TIER_2_MEDIO: Cuota entre 3% y 15%
-# - TIER_3_BAJO: Cuota < 3% y > 0
-# - TIER_4_CERO: Saldo 0 o nulo
 totales_mensuales <- datos_consolidados %>%
   group_by(fecha_corte) %>%
   summarise(saldo_sistema = sum(total_construccion, na.rm = TRUE))
@@ -119,27 +115,109 @@ estados_posibles <- c("TIER_1_ALTO", "TIER_2_MEDIO", "TIER_3_BAJO", "TIER_4_CERO
 fit_markov <- markovchainFit(data = secuencias, possibleStates = estados_posibles, method = "mle")
 matriz_probabilidades <- fit_markov$estimate@transitionMatrix
 
-# 7. Generación de Gráfico con ggplot2 (Mapa de calor de la matriz de transición)
+# Helper para exportar gráficas a Base64
+guardar_grafico_base64 <- function(plot_obj, width = 8, height = 5.2) {
+  img_temp <- tempfile(fileext = ".png")
+  ggsave(img_temp, plot = plot_obj, width = width, height = height, dpi = 150)
+  paste0("data:image/png;base64,", base64enc::base64encode(img_temp))
+}
+
+# 7.1 Gráfico 1: Heatmap de la Matriz de Transición
 df_heatmap <- as.data.frame(as.table(matriz_probabilidades))
 colnames(df_heatmap) <- c("Origen", "Destino", "Probabilidad")
 
-p_markov <- ggplot(df_heatmap, aes(x = Destino, y = Origen, fill = Probabilidad)) +
-  geom_tile(color = "white", linewidth = 0.5) +
-  geom_text(aes(label = round(Probabilidad, 3)), color = "black", fontface = "bold") +
-  scale_fill_gradient(low = "#e0f2fe", high = "#0284c7") +
-  theme_minimal(base_size = 13) +
+p_heatmap <- ggplot(df_heatmap, aes(x = Destino, y = Origen, fill = Probabilidad)) +
+  geom_tile(color = "#0f172a", linewidth = 0.8) +
+  geom_text(aes(label = sprintf("%.3f", Probabilidad)), color = "#0f172a", fontface = "bold", size = 4.2) +
+  scale_fill_gradient(low = "#bae6fd", high = "#0284c7") +
+  theme_minimal(base_size = 12) +
   labs(
     title = "Matriz de Transición Estocástica (Cadenas de Markov)",
     subtitle = "Probabilidad mensual de migración de cuota de crédito en Construcción SBP",
     x = "Estado Futuro (t+1)",
     y = "Estado Actual (t)"
   ) +
-  theme(panel.grid = element_blank())
+  theme(
+    plot.title = element_text(face = "bold", color = "#0f172a"),
+    panel.grid = element_blank(),
+    axis.text = element_text(face = "bold")
+  )
 
-# Guardar y convertir a Base64
-img_temp <- tempfile(fileext = ".png")
-ggsave(img_temp, plot = p_markov, width = 8, height = 6, dpi = 150)
-grafico_base64 <- paste0("data:image/png;base64,", base64enc::base64encode(img_temp))
+grafico_heatmap_base64 <- guardar_grafico_base64(p_heatmap, width = 8, height = 5.5)
+
+# 7.2 Gráfico 2: Proyección y Convergencia Estocástica (P^t para t = 1, 3, 6, 12, 24 meses)
+horizontes <- c(1, 2, 3, 6, 12, 24)
+df_proyeccion <- data.frame()
+
+mc_obj <- fit_markov$estimate
+
+for (h in horizontes) {
+  P_h <- (mc_obj ^ h)@transitionMatrix
+  for (i in rownames(P_h)) {
+    for (j in colnames(P_h)) {
+      df_proyeccion <- rbind(df_proyeccion, data.frame(
+        Meses = h,
+        Origen = i,
+        Destino = j,
+        Probabilidad = P_h[i, j]
+      ))
+    }
+  }
+}
+
+p_proyeccion <- ggplot(df_proyeccion %>% filter(Origen == Destino),
+                       aes(x = Meses, y = Probabilidad, color = Origen, group = Origen)) +
+  geom_line(linewidth = 1.3) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = horizontes) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_color_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                                "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Persistencia Estocástica y Convergencia en el Tiempo (P^t)",
+    subtitle = "Probabilidad de permanencia en el mismo Tier a 1, 3, 6, 12 y 24 meses",
+    x = "Horizonte Temporal (Meses)",
+    y = "Probabilidad de Permanencia",
+    color = "Nivel de Exposición"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", color = "#0f172a"),
+    legend.position = "bottom"
+  )
+
+grafico_proyeccion_base64 <- guardar_grafico_base64(p_proyeccion, width = 8, height = 5)
+
+# 7.3 Gráfico 3: Concentración de Cartera Bancaria (Top 10 Entidades en Construcción)
+fecha_reciente <- max(datos_con_estados$fecha_corte, na.rm = TRUE)
+top_bancos <- datos_con_estados %>%
+  filter(fecha_corte == fecha_reciente, total_construccion > 0) %>%
+  arrange(desc(total_construccion)) %>%
+  slice_head(n = 10) %>%
+  mutate(
+    banco_corto = str_trunc(banco, 26),
+    saldo_millones = total_construccion / 1e6
+  )
+
+p_concentracion <- ggplot(top_bancos, aes(x = reorder(banco_corto, saldo_millones), y = saldo_millones, fill = estado_markov)) +
+  geom_col(width = 0.7) +
+  coord_flip() +
+  scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                               "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = paste("Concentración del Crédito en Construcción (Corte:", format(fecha_reciente, "%m/%Y"), ")"),
+    subtitle = "Top 10 Entidades Financieras en Panamá (Saldos en Millones USD)",
+    x = NULL,
+    y = "Saldo de Construcción (Millones USD)",
+    fill = "Clasificación"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", color = "#0f172a"),
+    legend.position = "bottom"
+  )
+
+grafico_concentracion_base64 <- guardar_grafico_base64(p_concentracion, width = 8.5, height = 5.2)
 
 # 8. Salida JSON estructurada para consumo de Quarkus
 salida_resultado <- list(
@@ -148,7 +226,9 @@ salida_resultado <- list(
   total_bancos_analizados = n_distinct(datos_con_estados$banco),
   estados = estados_posibles,
   matriz_transicion = as.data.frame(matriz_probabilidades),
-  grafico_markov_base64 = grafico_base64
+  grafico_markov_base64 = grafico_heatmap_base64,
+  grafico_proyeccion_base64 = grafico_proyeccion_base64,
+  grafico_concentracion_base64 = grafico_concentracion_base64
 )
 
 cat(toJSON(salida_resultado, auto_unbox = TRUE))
