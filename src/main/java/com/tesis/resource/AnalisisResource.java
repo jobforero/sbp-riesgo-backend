@@ -2,7 +2,6 @@ package com.tesis.resource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.tesis.service.MarkovService;
-import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -32,7 +31,8 @@ public class AnalisisResource {
     @Consumes(MediaType.MULTIPART_FORM_DATA)
     public Response subirReporte(
             @RestForm("file") FileUpload file,
-            @RestForm("tipoDocumento") String tipoDocumento) {
+            @RestForm("tipoDocumento") String tipoDocumento,
+            @RestForm("tipoAnalisis") String tipoAnalisis) { // <-- 1. Recibimos el tipo de análisis
 
         if (file == null) {
             return Response.status(Response.Status.BAD_REQUEST)
@@ -49,8 +49,13 @@ public class AnalisisResource {
             File destino = new File(uploadDir, file.fileName());
             Files.copy(file.filePath(), destino.toPath(), StandardCopyOption.REPLACE_EXISTING);
 
-            // Ejecuta el pipeline en R y guarda en Neon
-            JsonNode resultadoJson = markovService.ejecutarAnalisis(destino);
+            // Si no viene o viene vacío, valor por defecto "TODOS"
+            String tipo = (tipoAnalisis != null && !tipoAnalisis.trim().isEmpty())
+                    ? tipoAnalisis.trim()
+                    : "TODOS";
+
+            // 2. Ejecuta el pipeline en R pasando también el tipo de análisis
+            JsonNode resultadoJson = markovService.ejecutarAnalisis(destino, tipo);
 
             return Response.ok(resultadoJson).build();
 

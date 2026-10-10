@@ -19,7 +19,7 @@ public class MarkovService {
     ObjectMapper objectMapper;
 
     // SIN @Transactional aquí para que no expire el timeout mientras R procesa
-    public JsonNode ejecutarAnalisis(File archivoExcel) throws Exception {
+    public JsonNode ejecutarAnalisis(File archivoExcel, String tipoAnalisis) throws Exception {
         File scriptR = new File("src/main/resources/scripts/01_procesar_reranking.R");
         if (!scriptR.exists()) {
             throw new IllegalStateException("No se encontró el script en: " + scriptR.getAbsolutePath());
@@ -40,7 +40,8 @@ public class MarkovService {
         ProcessBuilder pb = new ProcessBuilder(
                 comandoR,
                 scriptR.getAbsolutePath(),
-                archivoExcel.getAbsolutePath()
+                archivoExcel.getAbsolutePath(),
+                tipoAnalisis // <-- Pasamos el tipo a R como args[2]
         );
         pb.redirectErrorStream(true);
 
