@@ -2,7 +2,7 @@ if (Sys.info()["sysname"] == "Windows") {
   .libPaths(c("C:/Users/jobfm/Documents/R/win-library/4.1", .libPaths()))
 }
 # 01_procesar_reranking.R
-# Pipeline analítico: Ingesta SBP + Cadenas de Markov + Visualizaciones Estocásticas, Concentración y Dinámica Temporal
+# Pipeline analítico: Ingesta SBP + Cadenas de Markov + Visualizaciones Estocásticas y de Mercado
 
 suppressPackageStartupMessages({
   library(readxl)
@@ -17,15 +17,16 @@ suppressPackageStartupMessages({
   library(base64enc)
 })
 
-# 1. Definición de argumentos
+# 1. Definición de argumentos dinámicos
 args <- commandArgs(trailingOnly = TRUE)
 archivo_excel <- if (length(args) > 0) args[1] else "RE-RANKING-en-RE0026_.xlsx"
+tipo_analisis <- if (length(args) > 1) toupper(args[2]) else "TODOS"
 
 if (!file.exists(archivo_excel)) {
   stop(paste("No se encontró el archivo:", archivo_excel))
 }
 
-# 2. Diccionario de conversión de meses en español a fechas
+# 2. Diccionario de conversión de meses a fechas
 normalizar_fecha_hoja <- function(nombre_hoja) {
   meses <- c(
     "ene" = "01", "enero" = "01", "feb" = "02", "febrero" = "02",
@@ -47,7 +48,7 @@ normalizar_fecha_hoja <- function(nombre_hoja) {
   as.Date(paste0(anio, "-", mes_num, "-01"))
 }
 
-# 3. Función para procesar cada hoja mensual
+# 3. Procesamiento de cada hoja mensual
 procesar_hoja <- function(hoja) {
   raw_df <- read_excel(archivo_excel, sheet = hoja, col_names = FALSE)
 
@@ -72,13 +73,9 @@ procesar_hoja <- function(hoja) {
       fecha_corte = fecha_mes,
       ranking = suppressWarnings(as.numeric(ranking)),
       total_cartera = suppressWarnings(as.numeric(total_cartera)),
-      total_construccion = suppressWarnings(as.numeric(total_construccion)),
-      ponderacion = suppressWarnings(as.numeric(ponderacion)),
-      vivienda_interino = suppressWarnings(as.numeric(vivienda_interino)),
-      local_comercial_interino = suppressWarnings(as.numeric(local_comercial_interino)),
-      infraestructura = suppressWarnings(as.numeric(infraestructura)),
-      otras_construcciones = suppressWarnings(as.numeric(otras_construcciones))
-    )
+      total_construccion = suppressWarnings(as.numeric(total_construccion))
+    ) %>%
+    select(fecha_corte, banco, total_cartera, total_construccion)
 
   return(df_limpio)
 }
@@ -88,7 +85,7 @@ hojas <- excel_sheets(archivo_excel)
 datos_consolidados <- map_dfr(hojas, procesar_hoja) %>%
   arrange(banco, fecha_corte)
 
-# 5. Modelado Estocástico: Clasificación en Estados para Cadenas de Markov
+# 5. Modelado Estocástico: Clasificación en Estados de Markov
 totales_mensuales <- datos_consolidados %>%
   group_by(fecha_corte) %>%
   summarise(saldo_sistema = sum(total_construccion, na.rm = TRUE))
@@ -105,7 +102,7 @@ datos_con_estados <- datos_consolidados %>%
     )
   )
 
-# 6. Estimación de la Matriz de Transición de Markov
+# 6. Estimación de la Matriz de Transición
 secuencias <- datos_con_estados %>%
   group_by(banco) %>%
   summarise(transiciones = list(estado_markov)) %>%
@@ -115,168 +112,178 @@ estados_posibles <- c("TIER_1_ALTO", "TIER_2_MEDIO", "TIER_3_BAJO", "TIER_4_CERO
 fit_markov <- markovchainFit(data = secuencias, possibleStates = estados_posibles, method = "mle")
 matriz_probabilidades <- fit_markov$estimate@transitionMatrix
 
-# Helper para exportar gráficas a Base64
-guardar_grafico_base64 <- function(plot_obj, width = 8, height = 5.2) {
+# Helper optimizado para exportar gráficos con baja huella de memoria (96 DPI)
+guardar_grafico_ligero <- function(plot_obj, width = 7.5, height = 4.8) {
   img_temp <- tempfile(fileext = ".png")
-  ggsave(img_temp, plot = plot_obj, width = width, height = height, dpi = 150)
-  paste0("data:image/png;base64,", base64enc::base64encode(img_temp))
+  ggsave(img_temp, plot = plot_obj, width = width, height = height, dpi = 96)
+  b64 <- paste0("data:image/png;base64,", base64enc::base64encode(img_temp))
+  unlink(img_temp)
+  return(b64)
 }
+
+# Inicialización segura en NULL para evitar errores de objeto no encontrado
+grafico_heatmap_base64 <- NULL
+grafico_proyeccion_base64 <- NULL
+grafico_concentracion_base64 <- NULL
+grafico_area_base64 <- NULL
+grafico_boxplot_base64 <- NULL
+grafico_scatter_base64 <- NULL
 
 # 7.1 Gráfico 1: Heatmap de la Matriz de Transición
-df_heatmap <- as.data.frame(as.table(matriz_probabilidades))
-colnames(df_heatmap) <- c("Origen", "Destino", "Probabilidad")
+if (tipo_analisis %in% c("TODOS", "HEATMAP")) {
+  df_heatmap <- as.data.frame(as.table(matriz_probabilidades))
+  colnames(df_heatmap) <- c("Origen", "Destino", "Probabilidad")
 
-p_heatmap <- ggplot(df_heatmap, aes(x = Destino, y = Origen, fill = Probabilidad)) +
-  geom_tile(color = "#0f172a", linewidth = 0.8) +
-  geom_text(aes(label = sprintf("%.3f", Probabilidad)), color = "#0f172a", fontface = "bold", size = 4.2) +
-  scale_fill_gradient(low = "#bae6fd", high = "#0284c7") +
-  theme_minimal(base_size = 12) +
-  labs(
-    title = "Matriz de Transición Estocástica (Cadenas de Markov)",
-    subtitle = "Probabilidad mensual de migración de cuota de crédito en Construcción SBP",
-    x = "Estado Futuro (t+1)",
-    y = "Estado Actual (t)"
-  ) +
-  theme(
-    plot.title = element_text(face = "bold", color = "#0f172a"),
-    panel.grid = element_blank(),
-    axis.text = element_text(face = "bold")
-  )
+  p1 <- ggplot(df_heatmap, aes(x = Destino, y = Origen, fill = Probabilidad)) +
+    geom_tile(color = "#0f172a", linewidth = 0.6) +
+    geom_text(aes(label = sprintf("%.3f", Probabilidad)), color = "#0f172a", fontface = "bold", size = 3.8) +
+    scale_fill_gradient(low = "#bae6fd", high = "#0284c7") +
+    theme_minimal(base_size = 11) +
+    labs(
+      title = "Matriz de Transición Estocástica (Cadenas de Markov)",
+      subtitle = "Probabilidad mensual de migración de cuota de crédito en Construcción SBP",
+      x = "Estado Futuro (t+1)",
+      y = "Estado Actual (t)"
+    ) +
+    theme(plot.title = element_text(face = "bold", color = "#0f172a"), panel.grid = element_blank())
 
-grafico_heatmap_base64 <- guardar_grafico_base64(p_heatmap, width = 8, height = 5.5)
-
-# 7.2 Gráfico 2: Proyección y Convergencia Estocástica (P^t para t = 1, 2, 3, 6, 12, 24 meses)
-horizontes <- c(1, 2, 3, 6, 12, 24)
-df_proyeccion <- data.frame()
-mc_obj <- fit_markov$estimate
-
-for (h in horizontes) {
-  P_h <- (mc_obj ^ h)@transitionMatrix
-  for (i in rownames(P_h)) {
-    for (j in colnames(P_h)) {
-      df_proyeccion <- rbind(df_proyeccion, data.frame(
-        Meses = h,
-        Origen = i,
-        Destino = j,
-        Probabilidad = P_h[i, j]
-      ))
-    }
-  }
+  grafico_heatmap_base64 <- guardar_grafico_ligero(p1)
+  rm(p1, df_heatmap); gc(verbose = FALSE)
 }
 
-p_proyeccion <- ggplot(df_proyeccion %>% filter(Origen == Destino),
-                       aes(x = Meses, y = Probabilidad, color = Origen, group = Origen)) +
-  geom_line(linewidth = 1.3) +
-  geom_point(size = 3) +
-  scale_x_continuous(breaks = horizontes) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  scale_color_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
-                                "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
-  theme_minimal(base_size = 12) +
-  labs(
-    title = "Persistencia Estocástica y Convergencia en el Tiempo (P^t)",
-    subtitle = "Probabilidad de permanencia en el mismo Tier a 1, 3, 6, 12 y 24 meses",
-    x = "Horizonte Temporal (Meses)",
-    y = "Probabilidad de Permanencia",
-    color = "Nivel de Exposición"
-  ) +
-  theme(
-    plot.title = element_text(face = "bold", color = "#0f172a"),
-    legend.position = "bottom"
-  )
+# 7.2 Gráfico 2: Proyección y Convergencia Estocástica (P^t)
+if (tipo_analisis %in% c("TODOS", "CONVERGENCIA")) {
+  horizontes <- c(1, 2, 3, 6, 12, 24)
+  df_proyeccion <- data.frame()
+  mc_obj <- fit_markov$estimate
 
-grafico_proyeccion_base64 <- guardar_grafico_base64(p_proyeccion, width = 8, height = 5)
+  for (h in horizontes) {
+    P_h <- (mc_obj ^ h)@transitionMatrix
+    for (i in rownames(P_h)) {
+      for (j in colnames(P_h)) {
+        df_proyeccion <- rbind(df_proyeccion, data.frame(
+          Meses = h, Origen = i, Destino = j, Probabilidad = P_h[i, j]
+        ))
+      }
+    }
+  }
 
-# 7.3 Gráfico 3: Concentración de Cartera Bancaria (Top 10 Entidades)
-fecha_reciente <- max(datos_con_estados$fecha_corte, na.rm = TRUE)
-top_bancos <- datos_con_estados %>%
-  filter(fecha_corte == fecha_reciente, total_construccion > 0) %>%
-  arrange(desc(total_construccion)) %>%
-  slice_head(n = 10) %>%
-  mutate(
-    banco_corto = str_trunc(banco, 26),
-    saldo_millones = total_construccion / 1e6
-  )
+  p2 <- ggplot(df_proyeccion %>% filter(Origen == Destino),
+               aes(x = Meses, y = Probabilidad, color = Origen, group = Origen)) +
+    geom_line(linewidth = 1.1) +
+    geom_point(size = 2.5) +
+    scale_x_continuous(breaks = horizontes) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_color_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                                  "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+    theme_minimal(base_size = 11) +
+    labs(
+      title = "Persistencia Estocástica y Convergencia en el Tiempo (P^t)",
+      subtitle = "Probabilidad de permanencia en el mismo Tier a 1, 3, 6, 12 y 24 meses",
+      x = "Horizonte Temporal (Meses)",
+      y = "Probabilidad de Permanencia",
+      color = "Nivel"
+    ) +
+    theme(plot.title = element_text(face = "bold", color = "#0f172a"), legend.position = "bottom")
 
-p_concentracion <- ggplot(top_bancos, aes(x = reorder(banco_corto, saldo_millones), y = saldo_millones, fill = estado_markov)) +
-  geom_col(width = 0.7) +
-  coord_flip() +
-  scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
-                               "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
-  theme_minimal(base_size = 12) +
-  labs(
-    title = paste("Concentración del Crédito en Construcción (Corte:", format(fecha_reciente, "%m/%Y"), ")"),
-    subtitle = "Top 10 Entidades Financieras en Panamá (Saldos en Millones USD)",
-    x = NULL,
-    y = "Saldo de Construcción (Millones USD)",
-    fill = "Clasificación"
-  ) +
-  theme(
-    plot.title = element_text(face = "bold", color = "#0f172a"),
-    legend.position = "bottom"
-  )
+  grafico_proyeccion_base64 <- guardar_grafico_ligero(p2)
+  rm(p2, df_proyeccion); gc(verbose = FALSE)
+}
 
-grafico_concentracion_base64 <- guardar_grafico_base64(p_concentracion, width = 8.5, height = 5.2)
+# 7.3 Gráfico 3: Concentración de Cartera (Top 10 Entidades)
+if (tipo_analisis %in% c("TODOS", "CONCENTRACION")) {
+  fecha_reciente <- max(datos_con_estados$fecha_corte, na.rm = TRUE)
+  top_bancos <- datos_con_estados %>%
+    filter(fecha_corte == fecha_reciente, total_construccion > 0) %>%
+    arrange(desc(total_construccion)) %>%
+    slice_head(n = 10) %>%
+    mutate(
+      banco_corto = str_trunc(banco, 24),
+      saldo_millones = total_construccion / 1e6
+    )
 
-# 7.4 Gráfico 4: Evolución Temporal por Áreas Apiladas (Stacked Area Chart - 100% Cuota de Mercado)
-evolucion_tiers <- datos_con_estados %>%
-  group_by(fecha_corte, estado_markov) %>%
-  summarise(saldo_tier = sum(total_construccion, na.rm = TRUE), .groups = "drop") %>%
-  group_by(fecha_corte) %>%
-  mutate(
-    saldo_total_mes = sum(saldo_tier),
-    proporcion = ifelse(saldo_total_mes > 0, saldo_tier / saldo_total_mes, 0)
-  ) %>%
-  ungroup() %>%
-  mutate(estado_markov = factor(estado_markov, levels = rev(estados_posibles)))
-
-p_area <- ggplot(evolucion_tiers, aes(x = fecha_corte, y = proporcion, fill = estado_markov)) +
-  geom_area(alpha = 0.9, position = "stack") +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  scale_x_date(date_labels = "%b %Y", date_breaks = "6 months") +
-  scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
-                               "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
-  theme_minimal(base_size = 12) +
-  labs(
-    title = "Evolución Temporal de la Cuota de Mercado por Estratos (Stacked Area)",
-    subtitle = "Participación histórica mensual del saldo crediticio según clasificación Markov",
-    x = "Línea Temporal",
-    y = "Participación Acumulada (% del Sistema)",
-    fill = "Estrato"
-  ) +
-  theme(
-    plot.title = element_text(face = "bold", color = "#0f172a"),
-    legend.position = "bottom",
-    axis.text.x = element_text(angle = 45, hjust = 1)
-  )
-
-
-  # 7.5 Gráfico 5: Diagrama de Cajas (Boxplot) de Distribución de Saldos por Tier
-  df_boxplot <- datos_con_estados %>%
-    filter(total_construccion > 0) %>%
-    mutate(saldo_millones = total_construccion / 1e6)
-
-  p_boxplot <- ggplot(df_boxplot, aes(x = estado_markov, y = saldo_millones, fill = estado_markov)) +
-    geom_boxplot(outlier.colour = "#ef4444", outlier.alpha = 0.6, alpha = 0.85) +
-    scale_y_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
+  p3 <- ggplot(top_bancos, aes(x = reorder(banco_corto, saldo_millones), y = saldo_millones, fill = estado_markov)) +
+    geom_col(width = 0.7) +
+    coord_flip() +
     scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
                                  "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
-    theme_minimal(base_size = 12) +
+    theme_minimal(base_size = 11) +
     labs(
-      title = "Distribución y Asimetría del Saldo por Estrato (Escala Log)",
-      subtitle = "Dispersión, cuartiles y valores atípicos de exposición crediticia",
-      x = "Estrato de Exposición",
-      y = "Saldo Crédito Construcción (Log USD)",
+      title = paste("Concentración del Crédito en Construcción (Corte:", format(fecha_reciente, "%m/%Y"), ")"),
+      subtitle = "Top 10 Entidades Financieras en Panamá (Saldos en Millones USD)",
+      x = NULL,
+      y = "Saldo de Construcción (Millones USD)",
+      fill = "Estrato"
+    ) +
+    theme(plot.title = element_text(face = "bold", color = "#0f172a"), legend.position = "bottom")
+
+  grafico_concentracion_base64 <- guardar_grafico_ligero(p3)
+  rm(p3, top_bancos); gc(verbose = FALSE)
+}
+
+# 7.4 Gráfico 4: Evolución Temporal por Áreas Apiladas (Stacked Area)
+if (tipo_analisis %in% c("TODOS", "AREAS")) {
+  evolucion_tiers <- datos_con_estados %>%
+    group_by(fecha_corte, estado_markov) %>%
+    summarise(saldo_tier = sum(total_construccion, na.rm = TRUE), .groups = "drop") %>%
+    group_by(fecha_corte) %>%
+    mutate(
+      saldo_total_mes = sum(saldo_tier),
+      proporcion = ifelse(saldo_total_mes > 0, saldo_tier / saldo_total_mes, 0)
+    ) %>%
+    ungroup() %>%
+    mutate(estado_markov = factor(estado_markov, levels = rev(estados_posibles)))
+
+  p4 <- ggplot(evolucion_tiers, aes(x = fecha_corte, y = proporcion, fill = estado_markov)) +
+    geom_area(alpha = 0.9, position = "stack") +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_x_date(date_labels = "%b %Y", date_breaks = "6 months") +
+    scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                                 "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+    theme_minimal(base_size = 11) +
+    labs(
+      title = "Evolución Temporal de la Cuota de Mercado por Estratos (Stacked Area)",
+      subtitle = "Participación histórica mensual del saldo crediticio según clasificación Markov",
+      x = "Línea Temporal",
+      y = "Participación Acumulada (% del Sistema)",
       fill = "Estrato"
     ) +
     theme(
       plot.title = element_text(face = "bold", color = "#0f172a"),
-      legend.position = "none"
+      legend.position = "bottom",
+      axis.text.x = element_text(angle = 45, hjust = 1)
     )
 
-  grafico_boxplot_base64 <- guardar_grafico_base64(p_boxplot, width = 8.5, height = 5)
+  grafico_area_base64 <- guardar_grafico_ligero(p4)
+  rm(p4, evolucion_tiers); gc(verbose = FALSE)
+}
 
-  # 7.6 Gráfico 6: Dispersión y Regresión Lineal (Cartera Total vs Cartera Construcción)
+# 7.5 Gráfico 5: Diagrama de Cajas (Boxplot) por Estrato
+if (tipo_analisis %in% c("TODOS", "BOXPLOT")) {
+  df_boxplot <- datos_con_estados %>%
+    filter(total_construccion > 0) %>%
+    mutate(saldo_millones = total_construccion / 1e6)
+
+  p5 <- ggplot(df_boxplot, aes(x = estado_markov, y = saldo_millones, fill = estado_markov)) +
+    geom_boxplot(outlier.colour = "#ef4444", outlier.alpha = 0.5, outlier.size = 1.2, alpha = 0.85) +
+    scale_y_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
+    scale_fill_manual(values = c("TIER_1_ALTO" = "#0284c7", "TIER_2_MEDIO" = "#10b981",
+                                 "TIER_3_BAJO" = "#f59e0b", "TIER_4_CERO" = "#ef4444")) +
+    theme_minimal(base_size = 11) +
+    labs(
+      title = "Distribución y Asimetría del Saldo por Estrato (Escala Log)",
+      subtitle = "Dispersión, cuartiles y valores atípicos de exposición crediticia",
+      x = "Estrato de Exposición",
+      y = "Saldo Crédito Construcción (Log USD)"
+    ) +
+    theme(plot.title = element_text(face = "bold", color = "#0f172a"), legend.position = "none")
+
+  grafico_boxplot_base64 <- guardar_grafico_ligero(p5)
+  rm(p5, df_boxplot); gc(verbose = FALSE)
+}
+
+# 7.6 Gráfico 6: Dispersión y Regresión Lineal (Cartera General vs Construcción)
+if (tipo_analisis %in% c("TODOS", "REGRESION")) {
   df_scatter <- datos_con_estados %>%
     filter(total_cartera > 0, total_construccion > 0) %>%
     mutate(
@@ -284,23 +291,23 @@ p_area <- ggplot(evolucion_tiers, aes(x = fecha_corte, y = proporcion, fill = es
       construccion_m = total_construccion / 1e6
     )
 
-  p_scatter <- ggplot(df_scatter, aes(x = cartera_total_m, y = construccion_m)) +
-    geom_point(color = "#0284c7", alpha = 0.35, size = 2) +
+  p6 <- ggplot(df_scatter, aes(x = cartera_total_m, y = construccion_m)) +
+    geom_point(color = "#0284c7", alpha = 0.35, size = 1.8) +
     geom_smooth(method = "lm", color = "#0f172a", linewidth = 1.1, se = TRUE) +
     scale_x_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
     scale_y_log10(labels = scales::dollar_format(suffix = "M", prefix = "$")) +
-    theme_minimal(base_size = 12) +
+    theme_minimal(base_size = 11) +
     labs(
       title = "Correlación Bivariada: Cartera General vs. Sector Construcción",
       subtitle = "Ajuste por mínimos cuadrados ordinarios (MCO) en escala logarítmica",
       x = "Cartera Total del Banco (Log USD)",
       y = "Crédito en Construcción (Log USD)"
     ) +
-    theme(
-      plot.title = element_text(face = "bold", color = "#0f172a")
-    )
+    theme(plot.title = element_text(face = "bold", color = "#0f172a"))
 
-grafico_area_base64 <- guardar_grafico_base64(p_area, width = 8.5, height = 5.2)
+  grafico_scatter_base64 <- guardar_grafico_ligero(p6)
+  rm(p6, df_scatter); gc(verbose = FALSE)
+}
 
 # 8. Salida JSON estructurada para consumo de Quarkus
 salida_resultado <- list(
@@ -309,6 +316,7 @@ salida_resultado <- list(
   total_bancos_analizados = n_distinct(datos_con_estados$banco),
   estados = estados_posibles,
   matriz_transicion = as.data.frame(matriz_probabilidades),
+  tipo_analisis_ejecutado = tipo_analisis,
   grafico_markov_base64 = grafico_heatmap_base64,
   grafico_proyeccion_base64 = grafico_proyeccion_base64,
   grafico_concentracion_base64 = grafico_concentracion_base64,
